@@ -16,7 +16,7 @@ import numpy as np
 from numpy.lib.recfunctions import stack_arrays
 
 from .modflow.mfparbc import ModflowParBc as mfparbc
-from .utils import Util2d, Util3d, Transient2d, MfList, check
+from .utils import Util2d, Util3d, Transient2d, Transient3d, MfList, check
 
 
 class Package(object):
@@ -128,6 +128,12 @@ class Package(object):
                                array_free_format=old_value.array_free_format)
             elif isinstance(old_value, Transient2d):
                 value = Transient2d(self.parent, old_value.shape,
+                                    old_value.dtype, value,
+                                    name=old_value.name_base,
+                                    fmtin=old_value.fmtin,
+                                    locat=old_value.locat)
+            elif isinstance(old_value, Transient3d):
+                value = Transient3d(self.parent, old_value.shape,
                                     old_value.dtype, value,
                                     name=old_value.name_base,
                                     fmtin=old_value.fmtin,
