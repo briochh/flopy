@@ -272,7 +272,14 @@ class MfList(DataInterface, DataListInterface):
                     else:
                         fmts.append('%15.7E')
                 else:
-                    fmts.append('%10G')
+                    if 'cssm' in field[0].lower():  # these are free format
+                        if numpy114:
+                            # Use numpy's floating-point formatter (Dragon4)
+                            fmts.append('%15s')
+                        else:
+                            fmts.append('%15.7E')
+                    else:
+                        fmts.append('%10.4E')   ######
             elif vtype == 'o':
                 if use_free:
                     fmts.append('%9s')

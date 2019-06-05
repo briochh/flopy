@@ -32,14 +32,46 @@ def test_mt3d_multispecies():
                              sconc3=sconc3, sconc5=5.)
     crch32 = np.random.random((nrow, ncol))
     cevt33 = np.random.random((nrow, ncol))
+    
+    point_data = [
+        [0, 9, 9] + [np.multiply(np.random.random(5), 1e-3).tolist()],
+        [0, 7, 7] + [np.random.random(5).tolist()]]
+    sp_data = []
+    for k, i, j, d in point_data:
+        sp_data.append([k, i, j, d[0], 15] + [r for r in d])
+
+    sp_data = np.rec.fromarrays(
+        np.array(sp_data).T,
+        dtype=np.dtype([('k', np.int32), ('i', np.int32),
+                        ('j', np.int32), ('css', np.float32),
+                        ('itype', np.int32),
+                        ('cssm(01)', np.float32), ('cssm(02)', np.float32),
+                        ('cssm(03)', np.float32), ('cssm(04)', np.float32),
+                        ('cssm(05)', np.float32)]))
+    sp_data_full = {i: sp_data for i in range(mt.nper)}
     ssm = flopy.mt3d.Mt3dSsm(mt, crch=1., crch2=2., crch3={2:crch32}, crch5=5.,
-                             cevt=1., cevt2=2., cevt3={3:cevt33}, cevt5=5.)
+                             cevt=1., cevt2=2., cevt3={3:cevt33}, cevt5=5.,
+                             stress_period_data=sp_data_full)
     crch2 = ssm.crch[1].array
     assert(crch2.max() == 2.)
     cevt2 = ssm.cevt[1].array
     assert(cevt2.max() == 2.)
     mt.write_input()
 
+    mt_load = flopy.mt3d.Mt3dms.load('{}.nam'.format(modelname),
+                                     modflowmodel=mf,
+                                     model_ws=testpth, verbose=True,
+                                     load_only=['btn'])
+    ext_unit_dict = flopy.utils.mfreadnam.parsenamefile(
+        os.path.join(mt.model_ws, mt.namefile), packages='SSM')
+    ssm_loaded = flopy.mt3d.Mt3dSsm.load(
+        os.path.join(mt.model_ws, mt.ssm.file_name[0]), model=mt_load,
+        ext_unit_dict=ext_unit_dict)
+    o_sp = mt.ssm.stress_period_data.data
+    n_sp = mt_load.ssm.stress_period_data.data
+    assert np.all([np.isclose(o_sp[kper][name], n_sp[kper][name]).all()
+                   for kper in range(mt.nper)
+                   for name in o_sp[0].dtype.fields.keys()])
     # Create a second MODFLOW model
     modelname2 = 'multispecies2'
     mf2 = flopy.modflow.Modflow(modelname=modelname2, model_ws=testpth)
