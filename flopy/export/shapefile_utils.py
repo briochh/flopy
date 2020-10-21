@@ -3,6 +3,7 @@ Module for exporting and importing flopy model attributes
 """
 import copy
 import shutil
+import inspect
 import json
 import numpy as np
 import os
@@ -16,16 +17,40 @@ from ..utils import Util3d, SpatialReference
 srefhttp = "https://spatialreference.org"
 
 
-def import_shapefile():
-    try:
-        import shapefile as sf
+def import_shapefile(check_version=True):
+    """Import shapefile module from pyshp.
 
-        return sf
-    except Exception as e:
-        raise Exception(
-            "io.to_shapefile(): error "
-            + "importing shapefile - try pip install pyshp"
+    Parameters
+    ----------
+    check_version : bool
+        Checks to ensure that pyshp is at least version 2. Default True,
+        which is usually required for Writer (which has a different API), but
+        can be False if only using Reader.
+
+    Returns
+    -------
+    module
+
+    Raises
+    ------
+    ImportError
+        If shapefile module is not found, or major version is less than 2.
+    """
+    try:
+        import shapefile
+    except ImportError:
+        raise ImportError(
+            inspect.getouterframes(inspect.currentframe())[1][3]
+            + ": error importing shapefile; try pip install pyshp"
         )
+    if check_version:
+        if int(shapefile.__version__.split(".")[0]) < 2:
+            raise ImportError(
+                inspect.getouterframes(inspect.currentframe())[1][3]
+                + ": shapefile version 2 or later required; try "
+                "pip install --upgrade pyshp"
+            )
+    return shapefile
 
 
 def write_gridlines_shapefile(filename, mg):
@@ -65,7 +90,12 @@ def write_gridlines_shapefile(filename, mg):
 
 
 def write_grid_shapefile(
-    filename, mg, array_dict, nan_val=np.nan, epsg=None, prj=None  # -1.0e9,
+    filename,
+    mg,
+    array_dict,
+    nan_val=np.nan,
+    epsg=None,
+    prj=None,  # -1.0e9,
 ):
     """
     Method to write a shapefile of gridded input data
@@ -332,7 +362,8 @@ def model_attributes_to_shapefile(
                             for ilay in range(a.model.modelgrid.nlay):
                                 u2d = a[ilay]
                                 name = "{}_{}".format(
-                                    shape_attr_name(u2d.name), ilay + 1
+                                    shape_attr_name(u2d.name),
+                                    ilay + 1,
                                 )
                                 arr = u2d.array
                                 assert arr.shape == horz_shape
@@ -438,7 +469,12 @@ def get_pyshp_field_info(dtypename):
 
 def get_pyshp_field_dtypes(code):
     """Returns a numpy dtype for a pyshp field type."""
-    dtypes = {"N": np.int, "F": np.float, "L": np.bool, "C": np.object}
+    dtypes = {
+        "N": np.int,
+        "F": np.float,
+        "L": np.bool,
+        "C": np.object,
+    }
     return dtypes.get(code, np.object)
 
 
@@ -455,21 +491,16 @@ def shp2recarray(shpname):
     recarray : np.recarray
 
     """
-    try:
-        import shapefile as sf
-    except Exception:
-        raise Exception(
-            "io.to_shapefile(): error "
-            + "importing shapefile - try pip install pyshp"
-        )
-    from ..utils.geometry import shape
+    from ..utils.geospatial_utils import GeoSpatialCollection
+
+    sf = import_shapefile(check_version=False)
 
     sfobj = sf.Reader(shpname)
     dtype = [
         (str(f[0]), get_pyshp_field_dtypes(f[1])) for f in sfobj.fields[1:]
     ]
 
-    geoms = [shape(s) for s in sfobj.iterShapes()]
+    geoms = GeoSpatialCollection(sfobj).flopy_geometry
     records = [
         tuple(r) + (geoms[i],) for i, r in enumerate(sfobj.iterRecords())
     ]
@@ -490,14 +521,18 @@ def recarray2shp(
 ):
     """
     Write a numpy record array to a shapefile, using a corresponding
-    list of geometries.
+    list of geometries. Method supports list of flopy geometry objects,
+    flopy Collection object, shapely Collection object, and geojson
+    Geometry Collection objects
 
     Parameters
     ----------
     recarray : np.recarray
         Numpy record array with attribute information that will go in the
         shapefile
-    geoms : list of flopy.utils.geometry objects
+    geoms : list of flopy.utils.geometry, shapely geometry collection,
+            flopy geometry collection, shapefile.Shapes,
+            list of shapefile.Shape objects, or geojson geometry collection
         The number of geometries in geoms must equal the number of records in
         recarray.
     shpname : str
@@ -516,6 +551,7 @@ def recarray2shp(
     subsequent use. See flopy.reference for more details.
 
     """
+    from ..utils.geospatial_utils import GeoSpatialCollection
 
     if len(recarray) != len(geoms):
         raise IndexError(
@@ -526,6 +562,9 @@ def recarray2shp(
         raise Exception("Recarray is empty")
 
     geomtype = None
+
+    geoms = GeoSpatialCollection(geoms).flopy_geometry
+
     for g in geoms:
         try:
             geomtype = g.shapeType
@@ -702,7 +741,10 @@ class CRS(object):
         if self.wktstr is not None:
             sp = [
                 p
-                for p in [self.standard_parallel_1, self.standard_parallel_2]
+                for p in [
+                    self.standard_parallel_1,
+                    self.standard_parallel_2,
+                ]
                 if p is not None
             ]
             sp = sp if len(sp) > 0 else None
@@ -777,7 +819,12 @@ class CRS(object):
             end = s[strt:].find("]") + strt
             try:
                 return float(self.wktstr[strt:end].split(",")[1])
-            except (IndexError, TypeError, ValueError, AttributeError):
+            except (
+                IndexError,
+                TypeError,
+                ValueError,
+                AttributeError,
+            ):
                 pass
 
     def _getgcsparam(self, txt):

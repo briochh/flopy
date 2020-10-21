@@ -6,6 +6,7 @@ except ImportError:
     plt = None
 
 from .geometry import transform
+from .geospatial_utils import GeoSpatialUtil
 
 try:
     from shapely.geometry import (
@@ -136,15 +137,8 @@ class GridIntersect:
             if self.rtree:
                 self.strtree = STRtree(self._get_gridshapes())
 
-            # set interesection methods
-            self.intersect_point = self._intersect_point_shapely
-            self.intersect_linestring = self._intersect_linestring_shapely
-            self.intersect_polygon = self._intersect_polygon_shapely
-
         elif self.method == "structured" and mfgrid.grid_type == "structured":
-            self.intersect_point = self._intersect_point_structured
-            self.intersect_linestring = self._intersect_linestring_structured
-            self.intersect_polygon = self._intersect_polygon_structured
+            pass
 
         else:
             raise ValueError(
@@ -154,6 +148,64 @@ class GridIntersect:
                     self.method, self.mfgrid.grid_type
                 )
             )
+
+    def intersect(self, shp, **kwargs):
+        """
+        Method to intersect a shape with a model grid
+
+        Parameters
+        ----------
+        shp : shapely.geometry, geojson object, shapefile.Shape,
+              or flopy geomerty object
+        sort_by_cellid : bool
+            Sort results by cellid
+        keepzerolengths : bool
+            boolean method to keep zero length intersections for
+            linestring intersection
+
+        Returns
+        -------
+        numpy.recarray
+            a record array containing information about the intersection
+        """
+        gu = GeoSpatialUtil(shp)
+        shp = gu.shapely
+        sort_by_cellid = kwargs.pop("sort_by_cellid", True)
+        keepzerolengths = kwargs.pop("keepzerolengths", False)
+
+        if gu.shapetype in ("Point", "MultiPoint"):
+            if (
+                self.method == "structured"
+                and self.mfgrid.grid_type == "structured"
+            ):
+                rec = self._intersect_point_structured(shp)
+            else:
+                rec = self._intersect_point_shapely(shp, sort_by_cellid)
+        elif gu.shapetype in ("LineString", "MultiLineString"):
+            if (
+                self.method == "structured"
+                and self.mfgrid.grid_type == "structured"
+            ):
+                rec = self._intersect_linestring_structured(
+                    shp, keepzerolengths
+                )
+            else:
+                rec = self._intersect_linestring_shapely(
+                    shp, keepzerolengths, sort_by_cellid
+                )
+        elif gu.shapetype in ("Polygon", "MultiPolygon"):
+            if (
+                self.method == "structured"
+                and self.mfgrid.grid_type == "structured"
+            ):
+                rec = self._intersect_polygon_structured(shp)
+            else:
+                rec = self._intersect_polygon_shapely(shp, sort_by_cellid)
+        else:
+            err = "Shapetype {} is not supported".format(gu.shapetype)
+            raise TypeError(err)
+
+        return rec
 
     def _set_method_get_gridshapes(self):
         """internal method, set self._get_gridshapes to the certain method for
@@ -557,7 +609,8 @@ class GridIntersect:
 
         Parameters
         ----------
-        shp : shapely.geometry
+        shp : shapely.geometry, geojson geometry, shapefile.shape,
+              or flopy geometry object
             shape to intersect with the grid
 
         Returns
@@ -567,6 +620,8 @@ class GridIntersect:
             the shape intersects with
         """
         # query grid
+        shp = GeoSpatialUtil(shp).shapely
+
         qresult = self.query_grid(shp)
         # filter result further if possible (only strtree and filter methods)
         qfiltered = self.filter_query_result(qresult, shp)
@@ -710,7 +765,7 @@ class GridIntersect:
             nodelist, lengths, vertices = [], [], []
             ixshapes = []
             for ls in lineclip:
-                n, l, v, ix = self._get_nodes_intersecting_linestring(ls)
+                n, l, v, ixs = self._get_nodes_intersecting_linestring(ls)
                 nodelist += n
                 lengths += l
                 # if necessary, transform coordinates back to real
@@ -722,26 +777,32 @@ class GridIntersect:
                 ):
                     v_realworld = []
                     for pt in v:
+                        pt = np.array(pt)
                         rx, ry = transform(
-                            [pt[0]],
-                            [pt[1]],
+                            pt[:, 0],
+                            pt[:, 1],
                             self.mfgrid.xoffset,
                             self.mfgrid.yoffset,
                             self.mfgrid.angrot_radians,
                             inverse=False,
                         )
                         v_realworld.append([rx, ry])
-                    ix_realworld = rotate(
-                        ix, self.mfgrid.angrot, origin=(0.0, 0.0)
-                    )
-                    ix_realworld = translate(
-                        ix_realworld, self.mfgrid.xoffset, self.mfgrid.yoffset
-                    )
+                    ixs_realworld = []
+                    for ix in ixs:
+                        ix_realworld = rotate(
+                            ix, self.mfgrid.angrot, origin=(0.0, 0.0)
+                        )
+                        ix_realworld = translate(
+                            ix_realworld,
+                            self.mfgrid.xoffset,
+                            self.mfgrid.yoffset,
+                        )
+                        ixs_realworld.append(ix_realworld)
                 else:
                     v_realworld = v
-                    ix_realworld = ix
+                    ixs_realworld = ixs
                 vertices += v_realworld
-                ixshapes += ix_realworld
+                ixshapes += ixs_realworld
         else:  # linestring is fully within grid
             (
                 nodelist,
@@ -758,9 +819,10 @@ class GridIntersect:
             ):
                 v_realworld = []
                 for pt in vertices:
+                    pt = np.array(pt)
                     rx, ry = transform(
-                        [pt[0]],
-                        [pt[1]],
+                        pt[:, 0],
+                        pt[:, 1],
                         self.mfgrid.xoffset,
                         self.mfgrid.yoffset,
                         self.mfgrid.angrot_radians,
@@ -874,7 +936,7 @@ class GridIntersect:
             x0 = [x[0]]
             y0 = [y[0]]
 
-        (i, j) = self.intersect_point(Point(x0[0], y0[0])).cellids[0]
+        (i, j) = self.intersect(Point(x0[0], y0[0])).cellids[0]
         Xe, Ye = self.mfgrid.xyedges
         xmin = Xe[j]
         xmax = Xe[j + 1]
@@ -887,7 +949,7 @@ class GridIntersect:
         ixshapes.append(intersect)
         length = intersect.length
         lengths.append(length)
-        if intersect.geom_type == "MultiLineString":
+        if hasattr(intersect, "geoms"):
             x, y = [], []
             for igeom in intersect.geoms:
                 x.append(igeom.xy[0])
@@ -972,7 +1034,7 @@ class GridIntersect:
                     intersect = linestring.intersection(pl)
                     ixshape.append(intersect)
                     length.append(intersect.length)
-                    if intersect.geom_type == "MultiLineString":
+                    if hasattr(intersect, "geoms"):
                         x, y = [], []
                         for igeom in intersect.geoms:
                             x.append(igeom.xy[0])
@@ -999,7 +1061,7 @@ class GridIntersect:
                     intersect = linestring.intersection(pl)
                     ixshape.append(intersect)
                     length.append(intersect.length)
-                    if intersect.geom_type == "MultiLineString":
+                    if hasattr(intersect, "geoms"):
                         x, y = [], []
                         for igeom in intersect.geoms:
                             x.append(igeom.xy[0])
@@ -1026,7 +1088,7 @@ class GridIntersect:
                     intersect = linestring.intersection(pl)
                     ixshape.append(intersect)
                     length.append(intersect.length)
-                    if intersect.geom_type == "MultiLineString":
+                    if hasattr(intersect, "geoms"):
                         x, y = [], []
                         for igeom in intersect.geoms:
                             x.append(igeom.xy[0])
@@ -1053,7 +1115,7 @@ class GridIntersect:
                     intersect = linestring.intersection(pl)
                     ixshape.append(intersect)
                     length.append(intersect.length)
-                    if intersect.geom_type == "MultiLineString":
+                    if hasattr(intersect, "geoms"):
                         x, y = [], []
                         for igeom in intersect.geoms:
                             x.append(igeom.xy[0])
@@ -1324,8 +1386,6 @@ class GridIntersect:
                         self.mfgrid.angrot_radians,
                         inverse=False,
                     )
-                    holes_pts.append((rx, ry))
-                geoms.append(holes_pts)
             # append (shells, holes) to transformed coordinates list
             geom_list.append(tuple(geoms))
         return geom_list
