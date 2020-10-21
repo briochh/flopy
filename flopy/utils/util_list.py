@@ -503,7 +503,7 @@ class MfList(DataInterface, DataListInterface):
         dfs = []
         for per in self.data.keys():
             recs = self.data[per]
-            if recs is None or len(recs) == 0:
+            if recs is None or recs == 0 or len(recs) == 0:
                 # add an empty dataframe if a stress period is
                 # empty (e.g. no pumping during a predevelopment
                 # period)
