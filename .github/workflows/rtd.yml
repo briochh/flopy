@@ -2,9 +2,9 @@ name: Read the Docs
 
 on:
   push:
-    branches: [ master, develop ]
+    branches: [master, develop]
   pull_request:
-    branches: [ develop ]
+    branches: [master, develop]
 
 jobs:
 
@@ -14,6 +14,7 @@ jobs:
     strategy:
       fail-fast: false
 
+    if: github.repository_owner == 'modflowpy'
     steps:
       - name: Checkout flopy repo
         uses: actions/checkout@v2
